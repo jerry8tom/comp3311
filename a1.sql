@@ -128,6 +128,7 @@ JOIN insured_item ii ON (ii.id = po.id)
 GROUP BY p.pid
 ORDER BY p.pid ASC;
 
+CREATE OR REPLACE VIEW Q7 (pid, name) AS
 select t.pid, t.name
 FROM tmp7 t, total tot
 WHERE t.cnt = tot.total
@@ -156,17 +157,30 @@ BEGIN
     FROM policy 
     WHERE status = 'E' AND expirydate > CURRENT_DATE AND effectivedate <= CURRENT_DATE;
 
-    UPDATE rating_record
-    SET rate = rr.rate + rr.rate*($1)/100.0
-    select rr.rid, rr.coid
+    UPDATE rating_record, 
+        (SELECT rid FROM rating_record
+         WHERE rid IN 
+            (SELECT rid FROM rating_record rr
+            JOIN coverage c ON (c.coid = rr.coid)
+            JOIN policy p ON (p.pno = c.pno)
+            WHERE p.status = 'E' AND p.expirydate > CURRENT_DATE AND p.effectivedate <= CURRENT_DATE))
+        AS change
+    SET rating_record.rate = rating_record.rate + rating_record.rate*($1)/100.0
+    WHERE rating_record.rid = change.rid;
+
+    return ret_val;
+END;
+$$ LANGUAGE plpgsql; 
+
+
+UPDATE rating_record
+    SET rate = rating_record.rate + rating_record.rate*($1)/100.0
+    select rr.rid, rr.coid, p.pno, p.status, p.expirydate, rr.rate
     FROM rating_record rr
     JOIN coverage c ON (c.coid = rr.coid)
     JOIN policy p ON (p.pno = c.pno)
     WHERE p.status = 'E' AND p.expirydate > CURRENT_DATE AND effectivedate <= CURRENT_DATE;
 
-    return ret_val;
-END;
-$$ LANGUAGE plpgsql; 
 
 -- Q10
 
