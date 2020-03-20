@@ -1,4 +1,6 @@
 -- Q1 
+
+
 create or replace view Q1(pid, firstname, lastname) as
 
 SELECT p.pid, p.firstname, p.lastname 
@@ -8,6 +10,7 @@ ORDER BY p.pid ASC;
 
 
 -- Q2
+
 
 CREATE OR REPLACE VIEW tmp(pno, id, brand, premium) AS
 select po.pno, i.id, i.brand, SUM(r.rate)
@@ -27,39 +30,26 @@ CREATE OR REPLACE VIEW Q2 (brand, id, pno, premium) AS
 select * from tmp2 t
 ORDER BY t.brand, t.id, t.pno ASC;
 
+
 -- Q3
 
-create or replace view Q3(pid, firstname, lastname) as
-
-SELECT p.pid, p.firstname, p.lastname, u.wdate
+CREATE OR REPLACE VIEW tmp3 (sid, wdate, pid) AS
+select DISTINCT ON(s.sid) s.sid, ub.wdate, p.pid-- po.pno, ur.urid
 FROM person p 
-    JOIN staff s ON (p.pid = s.pid)
-    LEFT JOIN underwritten_by u ON (u.sid = s.sid)
-    LEFT JOIN underwriting_record ur ON (ur.urid = u.urid)
-    LEFT JOIN policy po ON (po.pno = ur.pno)
-    WHERE CURRENT_DATE - u.wdate > 365 OR  u.wdate IS NULL
-    ORDER BY p.pid ASC;
-;
-
-create or replace view tmp3 (pid, firstname, lastname, wdate, urid) AS 
-SELECT p.pid, p.firstname, p.lastname, ub.wdate, ub.urid
-FROM person p
 RIGHT JOIN staff s ON (p.pid = s.pid)
 LEFT JOIN policy po ON (po.sid = s.sid)
 LEFT JOIN underwriting_record ur ON (ur.pno = po.pno)
-LEFT JOIN underwritten_by ub ON (ub.urid = ur.urid)
-WHERE (ub.wdate - CURRENT_DATE) > 365 OR ub.wdate IS NULL
-ORDER BY p.pid ASC;
+LEFT JOIN underwritten_by ub ON (ub.urid = ur.urid);
 
-select t.pid, t.firstname, t.lastname 
-FROM tmp3 t 
-JOIN (select t2.pid, t2.urid FROM tmp3 t2 
-WHERE (t2.wdate - CURRENT_DATE) > 365 OR t2.wdate IS NULL)
-t3 
-ON t3.pid = t.pid
-ORDER BY t.pid ASC;
+CREATE OR REPLACE VIEW Q3 (pid, firstname, lastname) AS
+select p.pid, p.firstname, p.lastname 
+FROM person p
+JOIN tmp3 s ON (s.pid = p.pid)
+WHERE s.wdate - CURRENT_DATE > 365 OR s.wdate IS NULL;
+
 
 -- Q4
+
 
 -- TODO : what if we have multiple people living 
 -- in the same suburb
@@ -72,7 +62,9 @@ JOIN policy po ON(po.pno = i.pno)
 GROUP BY p.suburb
 ORDER BY COUNT(po.pno), p.suburb;
 
+
 -- Q5
+
 
 create or replace view Q5(pno, pname, pid, firstname, lastname) as
 
@@ -84,15 +76,9 @@ FROM person pe
     JOIN underwriting_record ur ON (ur.pno = p.pno) -- underwritten by
 ORDER BY p.pno ASC;
 
--- JOIN underwritten_by u ON (u.sid = s.sid)   -- underw by
-
--- select DISTINCT(p.pno), p.pname, pe.pid, pe.firstname, pe.lastname
--- FROM person pe, staff s, policy p, rated_by rb, underwritten_by u
--- WHERE pe.pid = s.pid AND p.sid = s.sid AND p.sid = rb.sid AND p.sid = u.sid AND rb.sid = s.sid AND rb.sid = s.sid
--- ORDER BY p.pno ASC;
-
 
 -- Q6
+
 
 create or replace view tmp6(pid, name, brand) as
 
@@ -101,8 +87,7 @@ FROM policy po
 JOIN insured_item i ON (i.id = po.id)
 JOIN staff s ON (s.sid = po.sid)
 JOIN person p ON (p.pid = s.pid)
-GROUP BY p.pid, i.brand
-;
+GROUP BY p.pid, i.brand;
 
 select t.pid, t.name, t.brand
 FROM tmp6 t 
@@ -110,10 +95,11 @@ JOIN (select t2.pid FROM tmp6 t2 GROUP BY t2.pid
 HAVING COUNT(t2.brand) = 1)
 t3
 ON t.pid = t3.pid
-ORDER BY t.pid ASC
-;
+ORDER BY t.pid ASC;
+
 
 -- Q7
+
 
 create or replace view total(total) as
 select COUNT (DISTINCT brand) FROM insured_item;
@@ -134,20 +120,19 @@ FROM tmp7 t, total tot
 WHERE t.cnt = tot.total
 ORDER BY t.pid ASC;
 
+
 -- Q8
 
 
 -- Q9
 
-DISTINCT ON(p.pno)
 
-create or replace view Q9 (pno, status, rid, rate) AS
-select  p.pno, p.STATUS, rr.rid, rr.rate
-FROM rating_record rr 
-JOIN coverage c ON (rr.coid = c.coid)
+CREATE OR REPLACE VIEW q9 (rid, coid, pno, status, expirydate, rate) AS
+select rr.rid, rr.coid, p.pno, p.status, p.expirydate, rr.rate
+FROM rating_record rr
+JOIN coverage c ON (c.coid = rr.coid)
 JOIN policy p ON (p.pno = c.pno)
-WHERE p.status = 'E' AND p.expirydate > CURRENT_DATE
-;
+WHERE p.status = 'E' AND p.expirydate > CURRENT_DATE AND effectivedate <= CURRENT_DATE; 
 
 create or replace function ratechange(Adj integer) returns integer
 AS $$
@@ -157,29 +142,13 @@ BEGIN
     FROM policy 
     WHERE status = 'E' AND expirydate > CURRENT_DATE AND effectivedate <= CURRENT_DATE;
 
-    UPDATE rating_record, 
-        (SELECT rid FROM rating_record
-         WHERE rid IN 
-            (SELECT rid FROM rating_record rr
-            JOIN coverage c ON (c.coid = rr.coid)
-            JOIN policy p ON (p.pno = c.pno)
-            WHERE p.status = 'E' AND p.expirydate > CURRENT_DATE AND p.effectivedate <= CURRENT_DATE))
-        AS change
-    SET rating_record.rate = rating_record.rate + rating_record.rate*($1)/100.0
-    WHERE rating_record.rid = change.rid;
+    UPDATE rating_record
+    SET rate = rating_record.rate*(1.0 + (Adj/100.0))
+    WHERE rating_record.coid IN (select coid FROM q9);
 
     return ret_val;
 END;
-$$ LANGUAGE plpgsql; 
-
-
-UPDATE rating_record
-    SET rate = rating_record.rate + rating_record.rate*($1)/100.0
-    select rr.rid, rr.coid, p.pno, p.status, p.expirydate, rr.rate
-    FROM rating_record rr
-    JOIN coverage c ON (c.coid = rr.coid)
-    JOIN policy p ON (p.pno = c.pno)
-    WHERE p.status = 'E' AND p.expirydate > CURRENT_DATE AND effectivedate <= CURRENT_DATE;
+$$ LANGUAGE plpgsql;
 
 
 -- Q10
